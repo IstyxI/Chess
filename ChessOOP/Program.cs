@@ -8,7 +8,7 @@ namespace ChessOOP
         static extern bool AllocConsole();
         static void Main()
         {
-            AllocConsole(); // Создать консоль
+            // AllocConsole(); // Создать консоль
             Console.WriteLine("Тест: консоль активна!");
 
             ApplicationConfiguration.Initialize();

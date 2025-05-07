@@ -1,5 +1,8 @@
 using Microsoft.VisualBasic.Devices;
 using System.Numerics;
+using System.Timers;
+using System.Xml.Linq;
+using static System.Windows.Forms.VisualStyles.VisualStyleElement.ProgressBar;
 
 namespace ChessOOP
 {
@@ -76,13 +79,13 @@ namespace ChessOOP
             foreach (var from in GetAllPiecesPositions(player))
             {
                 var piece = _board[from];
-                var moves = piece.GetPossibleMoves(from, _board)
+                var moves = piece.GetPossibleMoves(from, _board, _board.gameState)
                     .Concat(piece.GetAttackMoves(from, _board));
 
                 foreach (var to in moves)
                 {
                     var tempBoard = _board.Clone();
-                    tempBoard.MovePiece(from, to);
+                    tempBoard.MovePiece(from, to, true);
                     if (!new CheckChecker(tempBoard).IsInCheck(player))
                         return false;
                 }
@@ -97,7 +100,7 @@ namespace ChessOOP
             foreach (var from in GetAllPiecesPositions(player))
             {
                 var piece = _board[from];
-                if (piece.GetPossibleMoves(from, _board).Any())
+                if (piece.GetPossibleMoves(from, _board, _board.gameState).Any())
                     return false;
             }
             return true;
@@ -134,21 +137,13 @@ namespace ChessOOP
 
         internal bool IsPositionUnderAttack(Position targetPosition, PlayerColor attackerColor)
         {
-            for (int row = 0; row < 8; row++)
+            // Проверяем атаки только от фигур противника
+            CheckChecker checker = new CheckChecker(_board);
+            foreach (var pos in checker.GetAllPiecesPositions(attackerColor))
             {
-                for (int col = 0; col < 8; col++)
-                {
-                    var position = new Position(row, col);
-                    ChessPiece piece = _board[position];
-                    if (piece != null && piece.Color == attackerColor)
-                    {
-                        var attacks = piece.GetAttackMoves(new Position(row, col), _board);
-                        if (attacks.Contains(targetPosition))
-                        {
-                            return true;
-                        }
-                    }
-                }
+                var piece = _board[pos];
+                if (piece.GetAttackMoves(pos, _board).Contains(targetPosition))
+                    return true;
             }
             return false;
         }
@@ -172,7 +167,7 @@ namespace ChessOOP
             if (_board[from] == null) return false;  // Не нажата ли до этого пустая клетка
             if (_board[from].Color != _game.CurrentPlayer) return false; // Игрок ходит своей фигурой
 
-            // 2. Специальные правила (рокировка и т.д.)
+            // Рокировка
             var piece = _board[from];
             if (piece.Type == PieceType.King && IsCastlingMove(from, to))
             {
@@ -180,14 +175,14 @@ namespace ChessOOP
                 return ValidateCastling(from, to);
             }
 
-            // 3. Проверка правил для конкретной фигуры
-            if (!piece.GetPossibleMoves(from, _board)
+            // Проверка правил для конкретной фигуры
+            if (!piece.GetPossibleMoves(from, _board, _board.gameState)
                 .Concat(_board[from]
                 .GetAttackMoves(from, _board))
                 .Contains(to))
                 return false;
 
-            // 4. Проверка шаха после хода
+            // Проверка шаха после хода
             if (WouldCauseSelfCheck(from, to))
                 return false;
 
@@ -203,11 +198,11 @@ namespace ChessOOP
             return isWhiteKingside || isWhiteQueenside || isBlackKingside || isBlackQueenside;
         }
 
-        private bool WouldCauseSelfCheck(Position from, Position to)
+        public bool WouldCauseSelfCheck(Position from, Position to)
         {
             // Симуляция хода и проверка, не остался ли король под шахом
             var tempBoard = _board.Clone();
-            tempBoard.MovePiece(from, to);
+            tempBoard.MovePiece(from, to, true);
             return new CheckChecker(tempBoard).IsInCheck(_game.CurrentPlayer);
         }
 
@@ -215,7 +210,8 @@ namespace ChessOOP
         {
             // Создаем временную копию доски
             var tempBoard = _board.Clone();
-            var tempGame = new ChessGame { _board = tempBoard };
+            Timers timers = new Timers();
+            var tempGame = new ChessGame(timers) { _board = tempBoard};
 
             // Получаем короля и ладью на временной доске
             var king = tempBoard[kingFrom] as King;
@@ -260,29 +256,31 @@ namespace ChessOOP
         public PlayerColor Color { get; }
         public abstract PieceType Type { get; }
         public bool HasMoved { get; set; }
-
-        protected ChessPiece(PlayerColor color)
+        public Player player { get; set; }
+        protected ChessPiece(Player player)
         {
-            Color = color;
+            Color = player.color;
+            this.player = player;
         }
+        public int ValueOfPiece { get; protected set; }
 
-        public abstract IEnumerable<Position> GetPossibleMoves(Position current, Board board);
+        public abstract IEnumerable<Position> GetPossibleMoves(Position current, Board board, GameState gameState);
         public abstract IEnumerable<Position> GetAttackMoves(Position current, Board board);
         public abstract ChessPiece Clone();
-        public virtual Image GetImage(string spritesPath)
+        public virtual Image GetImage(string spritesPath, int picHeight = 100, int picWidth = 100)
         {
             var y = Color == PlayerColor.White ? 0 : 150;
             var x = 150 * ((int)Type - 1);
-            return LoadImagePart(spritesPath, x, y);
+            return LoadImagePart(spritesPath, x, y, picHeight, picWidth);
         }
 
-        private Image LoadImagePart(string path, int x, int y)
+        private Image LoadImagePart(string path, int x, int y, int picHeight=100, int picWidth=100)
         {
-            var image = new Bitmap(100, 100);
+            var image = new Bitmap(picHeight, picWidth);
             using var g = Graphics.FromImage(image);
             g.DrawImage(Image.FromFile(path),
-                new Rectangle(0, 0, 100, 100),
-                new Rectangle(x, y, 150, 150),
+                new Rectangle(0, 0, picWidth, picHeight), // куда рисуем (форма)
+                new Rectangle(x, y, 150, 150),  // откуда рисуем  (png)
                 GraphicsUnit.Pixel);
             return image;
         }
@@ -317,15 +315,13 @@ namespace ChessOOP
     public class Pawn : ChessPiece
     {
         public override PieceType Type => PieceType.Pawn;
-
-        public Pawn(PlayerColor color) : base(color) { }
-
-        public override IEnumerable<Position> GetPossibleMoves(Position current, Board board)
+        public Pawn(Player player) : base(player) { }
+        public int ValueOfPiece { get; protected set; } = 1;
+        public override IEnumerable<Position> GetPossibleMoves(Position current, Board board, GameState gameState)
         {
             var moves = new List<Position>();
             int direction = Color == PlayerColor.White ? -1 : 1;
 
-            // Логика ходов пешки
             var next = current.AddRow(direction);
             if (board.IsEmpty(next))
             {
@@ -365,52 +361,52 @@ namespace ChessOOP
         }
         public override ChessPiece Clone()
         {
-            return new Pawn(this.Color) { HasMoved = this.HasMoved };
+            return new Pawn(this.player) { HasMoved = this.HasMoved };
         }
     }
     public class Bishop : ChessPiece
     {
         public override PieceType Type => PieceType.Bishop;
+        public int ValueOfPiece { get; protected set; } = 3;
+        public Bishop(Player player) : base(player) { }
 
-        public Bishop(PlayerColor color) : base(color) { }
-
-        public override IEnumerable<Position> GetPossibleMoves(Position current, Board board)
+        public override IEnumerable<Position> GetPossibleMoves(Position current, Board board, GameState gameState)
         {
             return GetLinearMoves(current, board, new[] { (1, 1), (1, -1), (-1, 1), (-1, -1) });
         }
 
         public override IEnumerable<Position> GetAttackMoves(Position current, Board board)
-            => GetPossibleMoves(current, board);
+            => GetPossibleMoves(current, board, board.gameState);
         public override ChessPiece Clone()
         {
-            return new Bishop(this.Color) { HasMoved = this.HasMoved };
+            return new Bishop(this.player) { HasMoved = this.HasMoved };
         }
     }
     public class Rook : ChessPiece
     {
         public override PieceType Type => PieceType.Rook;
+        public int ValueOfPiece { get; protected set; } = 5;
+        public Rook(Player player) : base(player) { }
 
-        public Rook(PlayerColor color) : base(color) { }
-
-        public override IEnumerable<Position> GetPossibleMoves(Position current, Board board)
+        public override IEnumerable<Position> GetPossibleMoves(Position current, Board board, GameState gameState)
         {
             return GetLinearMoves(current, board, new[] { (1, 0), (-1, 0), (0, 1), (0, -1) });
         }
 
         public override IEnumerable<Position> GetAttackMoves(Position current, Board board)
-            => GetPossibleMoves(current, board);
+            => GetPossibleMoves(current, board, board.gameState);
         public override ChessPiece Clone()
         {
-            return new Rook(this.Color) { HasMoved = this.HasMoved };
+            return new Rook(this.player) { HasMoved = this.HasMoved };
         }
     }
     public class Knight : ChessPiece
     {
         public override PieceType Type => PieceType.Knight;
+        public int ValueOfPiece { get; protected set; } = 3;
+        public Knight(Player player) : base(player) { }
 
-        public Knight(PlayerColor color) : base(color) { }
-
-        public override IEnumerable<Position> GetPossibleMoves(Position current, Board board)
+        public override IEnumerable<Position> GetPossibleMoves(Position current, Board board, GameState gameState)
         {
             int[] dx = { 2, 2, -2, -2, 1, 1, -1, -1 };
             int[] dy = { 1, -1, 1, -1, 2, -2, 2, -2 };
@@ -424,19 +420,19 @@ namespace ChessOOP
         }
 
         public override IEnumerable<Position> GetAttackMoves(Position current, Board board)
-            => GetPossibleMoves(current, board);
+            => GetPossibleMoves(current, board, board.gameState);
         public override ChessPiece Clone()
         {
-            return new Knight(this.Color) { HasMoved = this.HasMoved };
+            return new Knight(this.player) { HasMoved = this.HasMoved };
         }
     }
     public class Queen : ChessPiece
     {
         public override PieceType Type => PieceType.Queen;
+        public int ValueOfPiece { get; protected set; } = 10;
+        public Queen(Player player) : base(player) { }
 
-        public Queen(PlayerColor color) : base(color) { }
-
-        public override IEnumerable<Position> GetPossibleMoves(Position current, Board board)
+        public override IEnumerable<Position> GetPossibleMoves(Position current, Board board, GameState gameState)
         {
             var directions = new[]
             {
@@ -448,19 +444,18 @@ namespace ChessOOP
         }
 
         public override IEnumerable<Position> GetAttackMoves(Position current, Board board)
-            => GetPossibleMoves(current, board);
+            => GetPossibleMoves(current, board, board.gameState);
         public override ChessPiece Clone()
         {
-            return new Queen(this.Color) { HasMoved = this.HasMoved };
+            return new Queen(this.player) { HasMoved = this.HasMoved };
         }
     }
     public class King : ChessPiece
     {
         public override PieceType Type => PieceType.King;
 
-        public King(PlayerColor color) : base(color) { }
-
-        public override IEnumerable<Position> GetPossibleMoves(Position current, Board board)
+        public King(Player player) : base(player) { }
+        public override IEnumerable<Position> GetPossibleMoves(Position current, Board board, GameState gameState)
         {
             var moves = new List<Position>();
             for (int dx = -1; dx <= 1; dx++)
@@ -473,14 +468,15 @@ namespace ChessOOP
                         yield return pos;
                 }
             }
-            // Добавляем возможные рокировки
-            if (!HasMoved)
+
+            if (!HasMoved && gameState != GameState.Check)
             {
-                // Короткая рокировка (kingside)
+                Console.WriteLine(new System.Diagnostics.StackTrace().ToString());
+                // Короткая рокировка
                 if (CanCastleKingside(current, board))
                     yield return new Position(current.Row, current.Col + 2);
 
-                // Длинная рокировка (queenside)
+                // Длинная рокировка
                 if (CanCastleQueenside(current, board))
                     yield return new Position(current.Row, current.Col - 2);
             }
@@ -524,10 +520,22 @@ namespace ChessOOP
             return true;
         }
         public override IEnumerable<Position> GetAttackMoves(Position current, Board board)
-            => GetPossibleMoves(current, board);
+        {
+                        var moves = new List<Position>();
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                for (int dy = -1; dy <= 1; dy++)
+                {
+                    if (dx == 0 && dy == 0) continue;
+                    Position pos = current.Add(dx, dy);
+                    if (pos.IsValid() && (board.IsEmpty(pos) || board.IsEnemy(pos, Color)))
+                        yield return pos;
+                }
+            }
+        }
         public override ChessPiece Clone()
         {
-            return new King(this.Color) { HasMoved = this.HasMoved };
+            return new King(this.player) { HasMoved = this.HasMoved };
         }
     }
 
@@ -536,6 +544,12 @@ namespace ChessOOP
     {
         private ChessPiece[,] _grid = new ChessPiece[8, 8];
         public Move PreviousMove { get; set; } = null;
+        public GameState gameState { get; }
+        public event EventHandler<PieceMovedEventArgs> PieceMoved;
+        protected virtual void OnPieceMoved(PieceMovedEventArgs e)
+        {
+            PieceMoved?.Invoke(this, e);
+        }
         public ChessPiece this[Position pos]
         {
             get
@@ -568,43 +582,52 @@ namespace ChessOOP
         }
         public void Initialize()
         {
+            Player whitePlayer = new Player(PlayerColor.White);
+            Player blackPlayer = new Player(PlayerColor.Black);
             // Инициализация начальной позиции
 
-            // Чёрные фигуры (верхняя часть доски, ряд 0)
-            _grid[0, 0] = new Rook(PlayerColor.Black);    // a8
-            _grid[0, 1] = new Knight(PlayerColor.Black);  // b8
-            _grid[0, 2] = new Bishop(PlayerColor.Black);  // c8
-            _grid[0, 3] = new Queen(PlayerColor.Black);   // d8
-            _grid[0, 4] = new King(PlayerColor.Black);    // e8
-            _grid[0, 5] = new Bishop(PlayerColor.Black);  // f8
-            _grid[0, 6] = new Knight(PlayerColor.Black);  // g8
-            _grid[0, 7] = new Rook(PlayerColor.Black);    // h8
+            _grid[0, 0] = new Rook(blackPlayer);
+            _grid[0, 1] = new Knight(blackPlayer);
+            _grid[0, 2] = new Bishop(blackPlayer);
+            _grid[0, 3] = new Queen(blackPlayer);
+            _grid[0, 4] = new King(blackPlayer);
+            _grid[0, 5] = new Bishop(blackPlayer);
+            _grid[0, 6] = new Knight(blackPlayer);
+            _grid[0, 7] = new Rook(blackPlayer);
 
             // Чёрные пешки (ряд 1)
             for (int col = 0; col < 8; col++)
             {
-                _grid[1, col] = new Pawn(PlayerColor.Black); // a7, b7, ..., h7
+                _grid[1, col] = new Pawn(blackPlayer);
             }
 
             // Белые фигуры (нижняя часть доски, ряд 7)
-            _grid[7, 0] = new Rook(PlayerColor.White);    // a1
-            _grid[7, 1] = new Knight(PlayerColor.White);  // b1
-            _grid[7, 2] = new Bishop(PlayerColor.White);  // c1
-            _grid[7, 3] = new Queen(PlayerColor.White);   // d1
-            _grid[7, 4] = new King(PlayerColor.White);    // e1
-            _grid[7, 5] = new Bishop(PlayerColor.White);  // f1
-            _grid[7, 6] = new Knight(PlayerColor.White);  // g1
-            _grid[7, 7] = new Rook(PlayerColor.White);    // h1
+            _grid[7, 0] = new Rook(whitePlayer);
+            _grid[7, 1] = new Knight(whitePlayer);
+            _grid[7, 2] = new Bishop(whitePlayer);
+            _grid[7, 3] = new Queen(whitePlayer);
+            _grid[7, 4] = new King(whitePlayer);
+            _grid[7, 5] = new Bishop(whitePlayer);
+            _grid[7, 6] = new Knight(whitePlayer);
+            _grid[7, 7] = new Rook(whitePlayer);
 
             // Белые пешки (ряд 6)
             for (int col = 0; col < 8; col++)
             {
-                _grid[6, col] = new Pawn(PlayerColor.White); // a2, b2, ..., h2
+                _grid[6, col] = new Pawn(whitePlayer);
             }
         }
-        public void MovePiece(Position from, Position to)
+        public void MovePiece(Position from, Position to, bool temp=false)
         {
             ChessPiece piece = _grid[from.Row, from.Col];
+            if (_grid[to.Row, to.Col] != null && temp == false)
+            {
+                Player player = piece.player;
+                player.EatenPieces.Add(_grid[to.Row, to.Col]);
+                
+                OnPieceMoved(new PieceMovedEventArgs(piece, _grid[to.Row, to.Col], from, to));
+            }
+              
             _grid[from.Row, from.Col] = null; // Удаляем фигуру с исходной позиции
             _grid[to.Row, to.Col] = piece;    // Размещаем на новой позиции
         }
@@ -616,8 +639,7 @@ namespace ChessOOP
             int rookToCol = isKingside ? 5 : 3;
 
             // Перемещение короля
-            var king = (King)this[kingFrom];
-            this[kingFrom] = null;
+            var king = this[kingFrom] as King;
             this[kingTo] = king;
             king.HasMoved = true;
 
@@ -630,6 +652,7 @@ namespace ChessOOP
 
             this[rookPositionFrom] = null;
             this[new Position(kingFrom.Row, rookToCol)] = rook;
+            this[new Position(kingTo.Row, kingTo.Col)] = king;
             rook.HasMoved = true;
         }
 
@@ -655,9 +678,11 @@ namespace ChessOOP
         public PlayerColor CurrentPlayer { get; private set; } = PlayerColor.White;
         public GameState State { get; private set; } = GameState.InProgress;
         private readonly MoveValidator _moveValidator;
+        public Timers _timers { private get; set; } = new Timers();
         private List<Move> history { get; set; } = [];
-        public ChessGame()
+        public ChessGame(Timers timers)
         {
+            _timers = timers;
             _moveValidator = new MoveValidator(this);
             _board.Initialize();
         }
@@ -669,16 +694,18 @@ namespace ChessOOP
 
             var piece = _board[from];
 
-            // Специальная обработка рокировки
+            // Обработка рокировки
             if (piece.Type == PieceType.King && Math.Abs(from.Col - to.Col) == 2)
             {
                 _board.ApplyCastling(from, to);
             }
+            // Обработка взятия на проходе
             if (piece.Type == PieceType.Pawn
                 && _board.IsEmpty(to)
                 && from.Col != to.Col)
             {
                 Position capturedPawnPos = new Position(from.Row, to.Col);
+                piece.player.EatenPieces.Add(_board[capturedPawnPos]);
                 _board[capturedPawnPos] = null;
                 _board.MovePiece(from, to);
             }
@@ -692,19 +719,33 @@ namespace ChessOOP
 
             if (piece.Type == PieceType.Pawn && IsPromotionRow(to))
             {
-                ShowPromotionDialog(piece.Color, to);
+                ShowPromotionDialog(piece.player, to);
             }
             PlayerColor opponent = CurrentPlayer.Opposite();
-            UpdateGameState(opponent); // Передаем оппонента
+            UpdateGameState(opponent);
 
             if (State == GameState.InProgress || State == GameState.Check)
             {
                 CurrentPlayer = opponent;
+                SwitchTimer(opponent);
             }
 
             _board.PreviousMove = new Move(from, to, piece.Type);
 
             return true;
+        }
+        private void SwitchTimer(PlayerColor playerColor)
+        {
+            if (playerColor == PlayerColor.Black)
+            {
+                _timers.timerBlack.Start();
+                _timers.timerWhite.Stop();
+            }
+            else
+            {
+                _timers.timerBlack.Stop();
+                _timers.timerWhite.Start();
+            }
         }
         private bool IsPromotionRow(Position pos)
         {
@@ -717,22 +758,22 @@ namespace ChessOOP
             return (piece.Color == PlayerColor.White && pos.Row == 0)
                 || (piece.Color == PlayerColor.Black && pos.Row == 7);
         }
-        private void ShowPromotionDialog(PlayerColor color, Position pos)
+        private void ShowPromotionDialog(Player player, Position pos)
         {
-            var promoForm = new PromotionForm(color);
+            var promoForm = new PromotionForm(player);
             if (promoForm.ShowDialog() == DialogResult.OK)
             {
-                _board[pos] = CreatePiece(promoForm.SelectedType, color);
+                _board[pos] = CreatePiece(promoForm.SelectedType, player);
             }
         }
-        private ChessPiece CreatePiece(PieceType type, PlayerColor color)
+        private ChessPiece CreatePiece(PieceType type, Player player)
         {
             return type switch
             {
-                PieceType.Queen => new Queen(color),
-                PieceType.Rook => new Rook(color),
-                PieceType.Bishop => new Bishop(color),
-                PieceType.Knight => new Knight(color),
+                PieceType.Queen => new Queen(player),
+                PieceType.Rook => new Rook(player),
+                PieceType.Bishop => new Bishop(player),
+                PieceType.Knight => new Knight(player),
                 _ => throw new ArgumentException("Недопустимый тип фигуры")
             };
         }
@@ -766,6 +807,7 @@ namespace ChessOOP
         private Button[,] _buttons = new Button[8, 8];
         private Position? _selectedPosition;
         private Label _statusLabel;
+        private Timers _timers;
         private static string projectDir = Directory.GetParent(AppDomain.CurrentDomain.BaseDirectory)
            .Parent
            .Parent
@@ -774,11 +816,14 @@ namespace ChessOOP
         private string chessSprites = Path.Combine(projectDir, "sprites", "chess.png");
         public ChessForm()
         {
+            _timers = new Timers();
             InitializeComponent();
             InitializeBoard();
-            _game = new ChessGame();
+            _game = new ChessGame(_timers);
             InitializeStatusLabel();
             UpdateBoard();
+            AddLabels();
+            _game._board.PieceMoved += ShowDiff;
             // Фиксированный размер окна (ширина, высота)
             this.Size = new Size(1200, 840);
 
@@ -789,7 +834,7 @@ namespace ChessOOP
         {
             return (position.Row + position.Col) % 2 == 0
                 ? Color.White
-                : Color.DarkGray;
+                : Color.Silver;
         }
         public void ClearHighlights()
         {
@@ -829,12 +874,11 @@ namespace ChessOOP
                 Text = "Статус: " + _game.State.ToString(),
                 Dock = DockStyle.Top,
                 TextAlign = ContentAlignment.TopRight,
-                Height = 30
+                Height = 30,
+                Font = new Font("Times New Roman", 18, FontStyle.Bold),
             };
-            _statusLabel.Font = new Font("Times New Roman", 18, FontStyle.Bold);
             Controls.Add(_statusLabel);
         }
-
         private void UpdateBoard()
         {
             for (int row = 0; row < 8; row++)
@@ -853,7 +897,7 @@ namespace ChessOOP
         private void OnTileClick(object sender, EventArgs e)
         {
             var position = (Position)((Button)sender).Tag;
-            if (_game.State == GameState.Checkmate)
+            if (_game.State == GameState.Checkmate || _timers.GameOver == true)
             {
                 MessageBox.Show($"Мат! Победил {_game.CurrentPlayer.Opposite().ToString()}");
                 ResetGame();
@@ -883,20 +927,99 @@ namespace ChessOOP
         }
         private void ResetGame()
         {
-            _game = new ChessGame();
+            ClearLabels();
+            Timers new_timers = new Timers();
+            _game = new ChessGame(new_timers);
+            _timers = new_timers;
+            AddLabels();
             UpdateBoard();
             ClearHighlights();
         }
         private void HighlightMoves(Position position)
         {
+            if (_buttons[position.Row, position.Col].BackColor == Color.Silver)
+            {
+                _buttons[position.Row, position.Col].BackColor = Color.DarkGray;
+            }
+            else if (_buttons[position.Row, position.Col].BackColor == Color.White)
+            {
+                _buttons[position.Row, position.Col].BackColor = Color.OldLace;
+            }
             var moves = _game._board[position]
-                .GetPossibleMoves(position, _game._board)
+                .GetPossibleMoves(position, _game._board, _game.State)
                 .Concat(_game._board[position]
                 .GetAttackMoves(position, _game._board));
 
+            var validator = new MoveValidator(_game);
             foreach (var move in moves)
             {
+                if (validator.WouldCauseSelfCheck(position, move))
+                    continue;
                 _buttons[move.Row, move.Col].BackColor = Color.LightGreen;
+            }
+        }
+        private void AddLabels()
+        {
+            Controls.Add(_timers.blackColon);
+            Controls.Add(_timers.blackSeconds);
+            Controls.Add(_timers.blackMinutes);
+            Controls.Add(_timers.whiteColon);
+            Controls.Add(_timers.whiteMinutes);
+            Controls.Add(_timers.whiteSeconds);
+        }
+        private void ClearLabels()
+        {
+            Controls.Remove(_timers.blackSeconds);
+            Controls.Remove(_timers.blackMinutes);
+            Controls.Remove(_timers.blackColon);
+            Controls.Remove(_timers.whiteSeconds);
+            Controls.Remove(_timers.whiteMinutes);
+            Controls.Remove(_timers.whiteColon);
+        }
+        private void AddPieceToDiff(ChessPiece piece, int x, int y, int size=50)
+        {
+            string chessSprites = Path.Combine(projectDir, "sprites", "chess.png");
+            Image pieceImage = piece.GetImage(chessSprites, size, size);
+            PictureBox piecePictureBox = new PictureBox()
+            {
+                Name = $"{piece.Color}{piece.Type}",
+                Image  = pieceImage,
+                Location = new Point(x, y),
+                Size = new Size(size, size),
+                BackColor = Color.Transparent,
+            };
+            Controls.Add(piecePictureBox);
+            piecePictureBox.BringToFront();
+        }
+        public void ShowDiff(object sender, PieceMovedEventArgs e)
+        {
+            const int size = 60;
+            var pieceSettings = new Dictionary<PieceType, (int startX, int whiteY, int blackY, int xStep)>
+            {
+                { PieceType.Pawn,    (810, 660, 100, size - size/4) },
+                { PieceType.Bishop,  (810, 600, 160, size - size/4) },
+                { PieceType.Knight,  (940, 600, 160, size) },
+                { PieceType.Rook,    (810, 540, 220, size) },
+                { PieceType.Queen,   (810, 480, 280, size) }
+            };
+
+            var currentX = new Dictionary<PieceType, int>
+            {
+                { PieceType.Pawn,    pieceSettings[PieceType.Pawn].startX },
+                { PieceType.Bishop,  pieceSettings[PieceType.Bishop].startX },
+                { PieceType.Knight,  pieceSettings[PieceType.Knight].startX },
+                { PieceType.Rook,    pieceSettings[PieceType.Rook].startX },
+                { PieceType.Queen,   pieceSettings[PieceType.Queen].startX }
+            };
+
+            foreach (var piece in e.MovedPiece.player.EatenPieces)
+            {
+                if (piece.Type == PieceType.King) continue;
+                var settings = pieceSettings[piece.Type];
+                var y = piece.Color == PlayerColor.Black ? settings.blackY : settings.whiteY;
+        
+                AddPieceToDiff(piece, currentX[piece.Type], y, size);
+                currentX[piece.Type] += settings.xStep;
             }
         }
     }

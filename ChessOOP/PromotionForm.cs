@@ -11,13 +11,13 @@ namespace ChessOOP
            .Parent
            .FullName;
         private string chessSprites = Path.Combine(projectDir, "sprites", "chess.png");
-        public PromotionForm(PlayerColor color)
+        public PromotionForm(Player player)
         {
             InitializeComponent();
-            InitializeButtons(color);
+            InitializeButtons(player);
         }
 
-        private void InitializeButtons(PlayerColor color)
+        private void InitializeButtons(Player player)
         {
             // Список доступных фигур для превращения
             var promotionPieces = new[]
@@ -40,7 +40,7 @@ namespace ChessOOP
                     Size = new Size(buttonSize, buttonSize),
                     Location = new Point(startX, spacing),
                     Tag = pieceType, // Сохраняем тип фигуры в Tag
-                    Image = GetPieceImage(pieceType, color),
+                    Image = GetPieceImage(pieceType, player),
                     FlatStyle = FlatStyle.Flat,
                     BackColor = Color.White
                 };
@@ -65,10 +65,10 @@ namespace ChessOOP
             );
         }
 
-        private Image GetPieceImage(PieceType type, PlayerColor color)
+        private Image GetPieceImage(PieceType type, Player player )
         {
             // Используйте вашу логику загрузки спрайтов
-            var piece = CreatePiece(type, color);
+            var piece = CreatePiece(type, player);
             return piece.GetImage(chessSprites);
         }
 
@@ -79,14 +79,14 @@ namespace ChessOOP
             Close();
         }
 
-        private ChessPiece CreatePiece(PieceType type, PlayerColor color)
+        private ChessPiece CreatePiece(PieceType type, Player player)
         {
             return type switch
             {
-                PieceType.Queen => new Queen(color),
-                PieceType.Rook => new Rook(color),
-                PieceType.Bishop => new Bishop(color),
-                PieceType.Knight => new Knight(color),
+                PieceType.Queen => new Queen(player),
+                PieceType.Rook => new Rook(player),
+                PieceType.Bishop => new Bishop(player),
+                PieceType.Knight => new Knight(player),
                 _ => throw new ArgumentException("Недопустимый тип фигуры")
             };
         }
